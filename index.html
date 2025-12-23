@@ -1,0 +1,936 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Space Maze: Asteroid Evasion</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+
+        body {
+            background-color: #050505;
+            color: #fff;
+            font-family: 'Orbitron', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            touch-action: none; /* Prevent scroll on mobile */
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2);
+            border: 2px solid #333;
+            border-radius: 4px;
+            background: #000;
+            /* Zoom/Responsive scaling */
+            width: 95vw;
+            height: auto;
+            max-width: 100vh; 
+            max-height: 90vh;
+            aspect-ratio: 21/20; /* Keep consistent with map dimensions */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+
+        .hud-top {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            font-size: 18px;
+            text-shadow: 0 0 5px #0ff;
+        }
+
+        #start-screen, #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            pointer-events: auto;
+            text-align: center;
+        }
+
+        h1 {
+            color: #0ff;
+            font-size: 32px;
+            margin-bottom: 10px;
+            text-shadow: 0 0 10px #0ff;
+        }
+
+        p {
+            color: #ccc;
+            margin-bottom: 20px;
+            font-size: 14px;
+            max-width: 80%;
+            line-height: 1.4;
+        }
+
+        button {
+            background: transparent;
+            color: #0ff;
+            border: 2px solid #0ff;
+            padding: 12px 24px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 18px;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.2s;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+        }
+
+        button:hover {
+            background: #0ff;
+            color: #000;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.8);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Mobile Controls Hints */
+        .controls-hint {
+            margin-top: 15px;
+            font-size: 12px;
+            color: #888;
+        }
+        
+        /* Scanline effect */
+        .scanlines {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(0,0,0,0.1) 50%,
+                rgba(0,0,0,0.1)
+            );
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        #msg-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-size: 24px;
+            text-shadow: 0 0 10px red;
+            display: none;
+            z-index: 8;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div class="scanlines"></div>
+        
+        <div id="ui-layer">
+            <div class="hud-top">
+                <div id="score-display">SCORE: 0</div>
+                <div id="level-display">SECTOR: 1</div>
+            </div>
+        </div>
+
+        <div id="msg-box">SHIELD CRITICAL!</div>
+
+        <div id="start-screen">
+            <h1>STAR MAZE</h1>
+            <p>Pilot your ship to collect Energy Cells.<br>Avoid the Asteroids.<br>Grab large Power Cores to activate Shields and destroy asteroids.</p>
+            <button id="start-btn">Initialize</button>
+            <div class="controls-hint">Use Arrow Keys or Swipe to Move</div>
+        </div>
+
+        <div id="game-over-screen" class="hidden">
+            <h1 id="go-title">HULL BREACH</h1>
+            <p id="final-score">Score: 0</p>
+            <button id="restart-btn">Re-Initialize</button>
+        </div>
+    </div>
+
+    <script>
+        // --- Game Constants & Configuration ---
+        const TILE_SIZE = 32; // Increased from 24
+        const FPS = 60;
+        
+        // Map Codes: 0=Empty, 1=Wall, 2=Pellet, 3=PowerPellet, 4=Door(Ghosts only), 9=Empty(No pellet)
+        // 21x21 Grid (Standard Pacman is usually larger, but we fit to screen)
+        const MAP_LAYOUT = [
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            [1,2,2,2,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,2,1],
+            [1,2,1,1,1,2,1,1,1,2,1,2,1,1,1,2,1,1,1,2,1],
+            [1,3,1,1,1,2,1,1,1,2,1,2,1,1,1,2,1,1,1,3,1],
+            [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1],
+            [1,2,1,1,1,2,1,2,1,1,1,1,1,2,1,2,1,1,1,2,1],
+            [1,2,2,2,2,2,1,2,2,2,1,2,2,2,1,2,2,2,2,2,1],
+            [1,1,1,1,1,2,1,1,1,9,1,9,1,1,1,2,1,1,1,1,1],
+            [9,9,9,9,1,2,1,9,9,9,4,9,9,9,1,2,1,9,9,9,9],
+            [1,1,1,1,1,2,1,9,1,1,9,1,1,9,1,2,1,1,1,1,1],
+            [9,2,2,2,2,2,9,9,1,9,9,9,1,9,9,2,2,2,2,2,9], // Tunnel row
+            [1,1,1,1,1,2,1,9,1,1,1,1,1,9,1,2,1,1,1,1,1],
+            [9,9,9,9,1,2,1,9,9,9,9,9,9,9,1,2,1,9,9,9,9],
+            [1,1,1,1,1,2,1,2,1,1,1,1,1,2,1,2,1,1,1,1,1],
+            [1,2,2,2,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,2,1],
+            [1,2,1,1,1,2,1,1,1,2,1,2,1,1,1,2,1,1,1,2,1],
+            [1,3,2,1,1,2,2,2,2,2,9,2,2,2,2,2,1,1,2,3,1],
+            [1,1,2,1,1,2,1,2,1,1,1,1,1,2,1,2,1,1,2,1,1],
+            [1,2,2,2,2,2,1,2,2,2,1,2,2,2,1,2,2,2,2,2,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+        ];
+
+        // Entity Directions
+        const DIR = { UP: 0, DOWN: 1, LEFT: 2, RIGHT: 3, NONE: 4 };
+        const DX = [0, 0, -1, 1, 0];
+        const DY = [-1, 1, 0, 0, 0];
+
+        // --- Game Classes ---
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 4 + 1;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                this.life = 1.0;
+                this.decay = Math.random() * 0.03 + 0.02;
+                this.color = color;
+                this.size = Math.random() * 4 + 2;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= this.decay;
+            }
+
+            draw(ctx) {
+                if (this.life <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class SmokeParticle {
+            constructor(x, y, dx, dy) {
+                this.x = x;
+                this.y = y;
+                // Drift opposite to movement plus random spread
+                this.vx = -dx * 0.5 + (Math.random() - 0.5) * 1.5;
+                this.vy = -dy * 0.5 + (Math.random() - 0.5) * 1.5;
+                this.life = 1.0;
+                this.decay = 0.03;
+                this.size = Math.random() * 2 + 3;
+            }
+            
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= this.decay;
+                this.size += 0.2; // Expand
+            }
+
+            draw(ctx) {
+                if (this.life <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = this.life * 0.4; // Semi-transparent
+                ctx.fillStyle = '#cccccc';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class Game {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                
+                this.cols = MAP_LAYOUT[0].length;
+                this.rows = MAP_LAYOUT.length;
+                
+                this.canvas.width = this.cols * TILE_SIZE;
+                this.canvas.height = this.rows * TILE_SIZE;
+
+                this.score = 0;
+                this.level = 1;
+                this.lives = 3;
+                this.gameState = 'MENU'; // MENU, PLAYING, EXPLODING, GAMEOVER
+                
+                this.map = [];
+                this.pellets = []; 
+                this.ship = null;
+                this.asteroids = [];
+                this.particles = [];
+                
+                this.inputDir = DIR.NONE;
+                this.loopId = null;
+                
+                // Asset Rendering Helpers
+                this.wallColor = '#444';
+                this.wallInnerColor = '#222';
+                
+                // Binding Inputs
+                document.addEventListener('keydown', this.handleKey.bind(this));
+                this.setupTouch();
+            }
+
+            setupTouch() {
+                let startX, startY;
+                this.canvas.addEventListener('touchstart', (e) => {
+                    startX = e.touches[0].clientX;
+                    startY = e.touches[0].clientY;
+                    e.preventDefault(); 
+                }, {passive: false});
+
+                this.canvas.addEventListener('touchmove', (e) => {
+                   e.preventDefault(); 
+                }, {passive: false});
+
+                this.canvas.addEventListener('touchend', (e) => {
+                    if (this.gameState !== 'PLAYING') return;
+                    
+                    const endX = e.changedTouches[0].clientX;
+                    const endY = e.changedTouches[0].clientY;
+                    const diffX = endX - startX;
+                    const diffY = endY - startY;
+
+                    if (Math.abs(diffX) > Math.abs(diffY)) {
+                        if (Math.abs(diffX) > 30) { 
+                            this.inputDir = diffX > 0 ? DIR.RIGHT : DIR.LEFT;
+                        }
+                    } else {
+                        if (Math.abs(diffY) > 30) {
+                            this.inputDir = diffY > 0 ? DIR.DOWN : DIR.UP;
+                        }
+                    }
+                });
+            }
+
+            handleKey(e) {
+                if (this.gameState !== 'PLAYING') return;
+                
+                if (e.key === 'ArrowUp' || e.key === 'w') this.inputDir = DIR.UP;
+                else if (e.key === 'ArrowDown' || e.key === 's') this.inputDir = DIR.DOWN;
+                else if (e.key === 'ArrowLeft' || e.key === 'a') this.inputDir = DIR.LEFT;
+                else if (e.key === 'ArrowRight' || e.key === 'd') this.inputDir = DIR.RIGHT;
+            }
+
+            init() {
+                this.score = 0;
+                this.level = 1;
+                this.lives = 1; 
+                document.getElementById('score-display').innerText = `SCORE: 0`;
+                document.getElementById('level-display').innerText = `SECTOR: 1`;
+                this.resetLevel();
+                
+                // Stop any existing loop before starting a new one
+                if (this.loopId) {
+                    cancelAnimationFrame(this.loopId);
+                    this.loopId = null;
+                }
+
+                this.gameState = 'PLAYING';
+                this.loop();
+            }
+
+            resetLevel() {
+                // Deep copy map
+                this.map = JSON.parse(JSON.stringify(MAP_LAYOUT));
+                this.pellets = [];
+                this.particles = [];
+                
+                // Parse Map for pellets
+                for(let r=0; r<this.rows; r++) {
+                    for(let c=0; c<this.cols; c++) {
+                        let cell = this.map[r][c];
+                        if(cell === 2) {
+                            this.pellets.push({c, r, type: 'dot', active: true});
+                        } else if (cell === 3) {
+                            this.pellets.push({c, r, type: 'power', active: true});
+                        }
+                    }
+                }
+                
+                // Spawn Entities
+                this.ship = new Ship(10, 10); 
+                this.ship.setPos(10, 12); 
+
+                this.asteroids = [
+                    new Asteroid(9, 8, 'rock1', 0),
+                    new Asteroid(10, 8, 'rock2', 1),
+                    new Asteroid(11, 8, 'rock3', 2),
+                    new Asteroid(10, 6, 'rock4', 3)
+                ];
+                
+                this.inputDir = DIR.NONE;
+            }
+
+            createExplosion(x, y, type = 'fire') {
+                const count = 30;
+                let colors;
+                
+                if (type === 'rock') {
+                    // Grey/Brown shades for rocks
+                    colors = ['#888888', '#aaaaaa', '#555555', '#6b5b5b'];
+                } else {
+                    // Fire/Sparks for ship
+                    colors = ['#ff0000', '#ffaa00', '#ffff00', '#ffffff'];
+                }
+
+                for(let i=0; i<count; i++) {
+                    const color = colors[Math.floor(Math.random() * colors.length)];
+                    this.particles.push(new Particle(x, y, color));
+                }
+                
+                // Add Smoke Cloud to explosion
+                for(let i=0; i<20; i++) {
+                    this.particles.push(new SmokeParticle(x, y, 0, 0)); 
+                }
+            }
+
+            update() {
+                if(this.gameState === 'GAMEOVER') return;
+
+                // Update Particles regardless of state
+                for(let i = this.particles.length - 1; i >= 0; i--) {
+                    this.particles[i].update();
+                    if(this.particles[i].life <= 0) this.particles.splice(i, 1);
+                }
+
+                if(this.gameState === 'EXPLODING') return;
+
+                // Move Ship
+                this.ship.move(this.inputDir, this.map, this.cols, this.particles);
+
+                // Check Pellets
+                const pIndex = this.pellets.findIndex(p => p.active && p.c === this.ship.gridC && p.r === this.ship.gridR);
+                if(pIndex !== -1) {
+                    const p = this.pellets[pIndex];
+                    p.active = false;
+                    
+                    if(p.type === 'dot') {
+                        this.score += 10;
+                    } else if (p.type === 'power') {
+                        this.score += 50;
+                        this.activateShields();
+                    }
+                    
+                    // Check Level Clear
+                    if(!this.pellets.some(p => p.active)) {
+                        this.levelUp();
+                    }
+                }
+
+                document.getElementById('score-display').innerText = `SCORE: ${this.score}`;
+
+                // Move Asteroids
+                this.asteroids.forEach(a => a.move(this.ship, this.map, this.cols));
+
+                // Check Collisions
+                for(let a of this.asteroids) {
+                    const dx = this.ship.x - a.x;
+                    const dy = this.ship.y - a.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    
+                    if(dist < TILE_SIZE * 0.8) {
+                        if(a.vulnerable) {
+                            // Destroy Asteroid
+                            this.score += 200;
+                            // Rock explosion for asteroid
+                            this.createExplosion(a.x, a.y, 'rock');
+                            a.respawn();
+                        } else {
+                            // Hit by asteroid
+                            this.startExplosionSequence();
+                        }
+                    }
+                }
+            }
+
+            startExplosionSequence() {
+                this.gameState = 'EXPLODING';
+                this.createExplosion(this.ship.x, this.ship.y, 'fire');
+                
+                // Wait for explosion to finish before showing Game Over
+                setTimeout(() => {
+                    this.triggerGameOver();
+                }, 1500);
+            }
+
+            activateShields() {
+                this.asteroids.forEach(a => a.makeVulnerable());
+                const msg = document.getElementById('msg-box');
+                msg.style.display = 'block';
+                msg.innerText = "SHIELDS ACTIVE";
+                msg.style.color = "#0ff";
+                msg.style.textShadow = "0 0 10px #0ff";
+                
+                setTimeout(() => {
+                    if(this.gameState !== 'PLAYING') return;
+                    msg.style.display = 'none';
+                }, 2000);
+            }
+
+            triggerGameOver() {
+                this.gameState = 'GAMEOVER';
+                document.getElementById('final-score').innerText = `Sector Reached: ${this.level} - Score: ${this.score}`;
+                document.getElementById('game-over-screen').classList.remove('hidden');
+            }
+
+            levelUp() {
+                this.level++;
+                document.getElementById('level-display').innerText = `SECTOR: ${this.level}`;
+                this.resetLevel();
+            }
+
+            draw() {
+                // Clear
+                this.ctx.fillStyle = '#050505';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                // Draw Walls
+                for(let r=0; r<this.rows; r++) {
+                    for(let c=0; c<this.cols; c++) {
+                        if(this.map[r][c] === 1) {
+                            this.drawWall(c, r);
+                        } else if (this.map[r][c] === 4) {
+                            this.ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
+                            this.ctx.fillRect(c*TILE_SIZE, r*TILE_SIZE + TILE_SIZE/2 - 2, TILE_SIZE, 4);
+                        }
+                    }
+                }
+
+                // Draw Pellets
+                this.pellets.forEach(p => {
+                    if(p.active) {
+                        const cx = p.c * TILE_SIZE + TILE_SIZE/2;
+                        const cy = p.r * TILE_SIZE + TILE_SIZE/2;
+                        
+                        this.ctx.beginPath();
+                        if(p.type === 'dot') {
+                            this.ctx.fillStyle = '#aaa';
+                            this.ctx.arc(cx, cy, 2, 0, Math.PI*2);
+                        } else {
+                            this.ctx.fillStyle = '#0ff';
+                            this.ctx.shadowBlur = 10;
+                            this.ctx.shadowColor = '#0ff';
+                            this.ctx.arc(cx, cy, 6, 0, Math.PI*2);
+                            this.ctx.shadowBlur = 0;
+                        }
+                        this.ctx.fill();
+                    }
+                });
+
+                // Draw Entities
+                if (this.gameState !== 'EXPLODING' || Math.random() > 0.5) { 
+                    // Flicker ship if exploding, or hide it? Let's hide it if exploding actually.
+                }
+                
+                if (this.gameState !== 'EXPLODING') {
+                    this.ship.draw(this.ctx);
+                }
+
+                this.asteroids.forEach(a => a.draw(this.ctx));
+                
+                // Draw Particles
+                this.particles.forEach(p => p.draw(this.ctx));
+            }
+            
+            // ... existing drawWall method ...
+            drawWall(c, r) {
+                const x = c * TILE_SIZE;
+                const y = r * TILE_SIZE;
+                
+                // Sci-fi wall style
+                this.ctx.strokeStyle = '#0044aa';
+                this.ctx.lineWidth = 1;
+                
+                const inset = TILE_SIZE * 0.2;
+                const size = TILE_SIZE - (inset * 2);
+                this.ctx.strokeRect(x + inset, y + inset, size, size);
+                
+                // Connections
+                this.ctx.fillStyle = '#002255';
+                const innerInset = TILE_SIZE * 0.35;
+                const innerSize = TILE_SIZE - (innerInset * 2);
+                // Center block
+                this.ctx.fillRect(x+innerInset, y+innerInset, innerSize, innerSize);
+            }
+
+            loop() {
+                if(this.gameState === 'MENU') return;
+                this.update();
+                this.draw();
+                this.loopId = requestAnimationFrame(() => this.loop());
+            }
+        }
+
+        // --- Entity Classes ---
+
+        class Entity {
+            constructor(c, r, speed) {
+                this.setPos(c, r);
+                this.speed = speed;
+                this.dir = DIR.NONE;
+                this.nextDir = DIR.NONE;
+            }
+
+            setPos(c, r) {
+                this.gridC = c;
+                this.gridR = r;
+                this.x = c * TILE_SIZE + TILE_SIZE/2;
+                this.y = r * TILE_SIZE + TILE_SIZE/2;
+            }
+
+            canMove(dir, map, cols) {
+                // Robustness: Check for invalid directions
+                if (dir < 0 || dir > 4) return false;
+                if (dir === DIR.NONE) return false;
+
+                const nextC = this.gridC + DX[dir];
+                const nextR = this.gridR + DY[dir];
+                
+                // Tunnel handling
+                if(nextC < 0 || nextC >= cols) return true;
+                
+                // Robustness: Check vertical bounds to prevent crash
+                if(nextR < 0 || nextR >= map.length) return false;
+
+                const cell = map[nextR][nextC];
+                return cell !== 1; 
+            }
+
+            moveBase(map, cols) {
+                // Snap to grid center logic
+                const centerX = this.gridC * TILE_SIZE + TILE_SIZE/2;
+                const centerY = this.gridR * TILE_SIZE + TILE_SIZE/2;
+                
+                // Are we at the center of a tile? (Approximate)
+                const dist = Math.sqrt((this.x - centerX)**2 + (this.y - centerY)**2);
+                const atCenter = dist < this.speed;
+
+                if (atCenter) {
+                    this.x = centerX;
+                    this.y = centerY;
+                    
+                    // Tunnel Teleport
+                    if (this.gridC <= 0 && this.dir === DIR.LEFT) {
+                        this.setPos(cols - 1, this.gridR);
+                        return;
+                    } else if (this.gridC >= cols - 1 && this.dir === DIR.RIGHT) {
+                        this.setPos(0, this.gridR);
+                        return;
+                    }
+
+                    // Try to change direction
+                    if (this.nextDir !== DIR.NONE && this.canMove(this.nextDir, map, cols)) {
+                        this.dir = this.nextDir;
+                        this.nextDir = DIR.NONE;
+                    }
+
+                    // If we can't move in current direction, stop
+                    if (!this.canMove(this.dir, map, cols)) {
+                        this.dir = DIR.NONE;
+                    }
+                    
+                    // Update Grid Coords based on new move
+                    if(this.dir !== DIR.NONE) {
+                        this.gridC += DX[this.dir];
+                        this.gridR += DY[this.dir];
+                    }
+                }
+                
+                // Apply Velocity
+                this.x += DX[this.dir] * this.speed;
+                this.y += DY[this.dir] * this.speed;
+            }
+        }
+
+        class Ship extends Entity {
+            constructor(c, r) {
+                super(c, r, 1.8); // Speed increased from 1.5 to 1.8
+                this.rotation = 0;
+            }
+
+            move(inputDir, map, cols, particles) {
+                if(inputDir !== DIR.NONE) this.nextDir = inputDir;
+                this.moveBase(map, cols);
+                
+                // Update rotation for visuals
+                if (this.dir === DIR.UP) this.rotation = 0;
+                if (this.dir === DIR.RIGHT) this.rotation = Math.PI / 2;
+                if (this.dir === DIR.DOWN) this.rotation = Math.PI;
+                if (this.dir === DIR.LEFT) this.rotation = -Math.PI / 2;
+
+                // Add Smoke Trail
+                if (this.dir !== DIR.NONE && particles && Math.random() > 0.2) {
+                    const offset = 12;
+                    // Calculate exhaust position based on rotation
+                    const ex = this.x - Math.sin(this.rotation) * offset;
+                    const ey = this.y + Math.cos(this.rotation) * offset;
+                    particles.push(new SmokeParticle(ex, ey, DX[this.dir], DY[this.dir]));
+                }
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                
+                // Draw Ship SVG Shape
+                const scale = TILE_SIZE / 24; // Scale based on original design
+                ctx.scale(scale * 0.8, scale * 0.8);
+                
+                ctx.beginPath();
+                ctx.fillStyle = '#ffee00'; // Main body
+                ctx.moveTo(0, -10);
+                ctx.lineTo(8, 8);
+                ctx.lineTo(0, 4);
+                ctx.lineTo(-8, 8);
+                ctx.closePath();
+                ctx.fill();
+                
+                // Engine flame
+                if(this.dir !== DIR.NONE) {
+                    ctx.beginPath();
+                    ctx.fillStyle = '#f00';
+                    ctx.moveTo(-4, 8);
+                    ctx.lineTo(0, 14 + Math.random()*4);
+                    ctx.lineTo(4, 8);
+                    ctx.fill();
+                }
+
+                ctx.restore();
+            }
+        }
+
+        class Asteroid extends Entity {
+            constructor(c, r, type, index) {
+                super(c, r, 1.35); // Speed increased from 1.15 to 1.35
+                this.origC = c;
+                this.origR = r;
+                this.type = type;
+                this.index = index;
+                this.vulnerable = false;
+                this.vulnTimer = 0;
+                this.state = 'scater';
+                this.rotation = Math.random() * Math.PI;
+                this.rotSpeed = (Math.random() - 0.5) * 0.1;
+                
+                this.validDirs = [DIR.UP, DIR.DOWN, DIR.LEFT, DIR.RIGHT];
+            }
+
+            makeVulnerable() {
+                this.vulnerable = true;
+                this.vulnTimer = 600;
+                // Reverse direction immediately on panic
+                if(this.dir === DIR.UP) this.nextDir = DIR.DOWN;
+                else if(this.dir === DIR.DOWN) this.nextDir = DIR.UP;
+                else if(this.dir === DIR.LEFT) this.nextDir = DIR.RIGHT;
+                else if(this.dir === DIR.RIGHT) this.nextDir = DIR.LEFT;
+            }
+
+            respawn() {
+                this.vulnerable = false;
+                this.setPos(this.origC, this.origR);
+                this.dir = DIR.UP; 
+                this.nextDir = DIR.NONE;
+            }
+
+            move(ship, map, cols) {
+                const rows = map.length;
+                this.rotation += this.rotSpeed;
+
+                if (this.vulnerable) {
+                    this.vulnTimer--;
+                    if(this.vulnTimer <= 0) this.vulnerable = false;
+                }
+
+                // AI Logic
+                const centerX = this.gridC * TILE_SIZE + TILE_SIZE/2;
+                const centerY = this.gridR * TILE_SIZE + TILE_SIZE/2;
+                const dist = Math.sqrt((this.x - centerX)**2 + (this.y - centerY)**2);
+                
+                if (dist < this.speed) {
+                    this.x = centerX;
+                    this.y = centerY;
+
+                    let possible = [];
+                    let reverseDir = -1;
+                    if(this.dir === DIR.UP) reverseDir = DIR.DOWN;
+                    if(this.dir === DIR.DOWN) reverseDir = DIR.UP;
+                    if(this.dir === DIR.LEFT) reverseDir = DIR.RIGHT;
+                    if(this.dir === DIR.RIGHT) reverseDir = DIR.LEFT;
+
+                    for(let d of this.validDirs) {
+                        if(d !== reverseDir && this.canMove(d, map, cols)) {
+                            possible.push(d);
+                        }
+                    }
+
+                    if(possible.length === 0) {
+                        if(this.canMove(reverseDir, map, cols)) possible.push(reverseDir);
+                        else possible.push(DIR.NONE);
+                    }
+
+                    let tx = ship.gridC;
+                    let ty = ship.gridR;
+
+                    if(this.vulnerable) {
+                        tx = Math.random() * cols;
+                        ty = Math.random() * rows;
+                    } else {
+                        if (this.index === 1) { 
+                            tx += DX[ship.dir] * 4;
+                            ty += DY[ship.dir] * 4;
+                        } else if (this.index === 2) {
+                            tx = Math.random() * cols;
+                            ty = Math.random() * rows;
+                        } else if (this.index === 3) {
+                            const distToShip = Math.sqrt((this.gridC - ship.gridC)**2 + (this.gridR - ship.gridR)**2);
+                            if (distToShip < 8) {
+                                tx = 0;
+                                ty = rows;
+                            }
+                        }
+                    }
+                    
+                    possible.sort((d1, d2) => {
+                        const x1 = this.gridC + DX[d1];
+                        const y1 = this.gridR + DY[d1];
+                        const dist1 = (x1-tx)**2 + (y1-ty)**2;
+
+                        const x2 = this.gridC + DX[d2];
+                        const y2 = this.gridR + DY[d2];
+                        const dist2 = (x2-tx)**2 + (y2-ty)**2;
+
+                        return this.vulnerable ? dist2 - dist1 : dist1 - dist2;
+                    });
+
+                    this.dir = possible[0];
+                    
+                    this.gridC += DX[this.dir];
+                    this.gridR += DY[this.dir];
+                }
+
+                this.x += DX[this.dir] * this.speed;
+                this.y += DY[this.dir] * this.speed;
+
+                const width = cols * TILE_SIZE;
+                if (this.x < -TILE_SIZE) {
+                    this.x = width + TILE_SIZE;
+                    this.gridC = cols-1;
+                } else if (this.x > width + TILE_SIZE) {
+                    this.x = -TILE_SIZE;
+                    this.gridC = 0;
+                }
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                
+                const size = TILE_SIZE * 0.4;
+                
+                if (this.vulnerable) {
+                    ctx.strokeStyle = '#00ffff';
+                    ctx.fillStyle = (Math.floor(Date.now() / 200) % 2 === 0) ? '#00aaaa' : '#ccffff';
+                } else {
+                    ctx.strokeStyle = '#888';
+                    ctx.fillStyle = '#555';
+                    if(this.index === 0) ctx.fillStyle = '#855'; // Red-ish rock
+                    if(this.index === 1) ctx.fillStyle = '#868'; // Pink-ish rock
+                }
+
+                ctx.beginPath();
+                ctx.moveTo(-size, -size/2);
+                ctx.lineTo(-size/2, -size);
+                ctx.lineTo(size/2, -size);
+                ctx.lineTo(size, -size/2);
+                ctx.lineTo(size, size/2);
+                ctx.lineTo(size/2, size);
+                ctx.lineTo(-size/2, size);
+                ctx.lineTo(-size, size/2);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                ctx.beginPath();
+                ctx.arc(-size*0.3, -size*0.3, size*0.2, 0, Math.PI*2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(size*0.4, size*0.2, size*0.3, 0, Math.PI*2);
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        // --- Init ---
+        const game = new Game();
+
+        document.getElementById('start-btn').addEventListener('click', () => {
+            document.getElementById('start-screen').classList.add('hidden');
+            game.init();
+        });
+
+        document.getElementById('restart-btn').addEventListener('click', () => {
+            document.getElementById('game-over-screen').classList.add('hidden');
+            game.init();
+        });
+
+    </script>
+</body>
+</html>
